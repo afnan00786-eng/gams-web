@@ -1,0 +1,68 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# Debug & Diagnostic Scripts
+check_db_details.js
+check_db_state.js
+check_recent_trips.ts
+check_trip_names.ts
+deep_trip_check.ts
+fix_trip_data.js
+get_panda_trips.js
+get_raw_stock_items.ts
+get_trip_details.ts
+inspect_large_amounts.js
+sync_all_trips_v2.js
+wipe_customers.js
+
+# Android build artifacts
+*.apk
+*.aab
+
+# Large binary files - never commit these
+*.zip
+jdk-17.0.2/
+jdk/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+/src/generated/prisma
+
+.vercel

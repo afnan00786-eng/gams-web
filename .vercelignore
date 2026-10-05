@@ -1,0 +1,30 @@
+# System and build files
+android/
+ios/
+node_modules/
+.next/
+.git/
+.vercel/
+.system_generated/
+logs/
+jdk-17.0.2/
+
+# Database
+*.db
+*.sqlite
+dev.db
+prisma/*.db
+
+# Temporary and backup files
+*.zip
+*.log
+*.tmp
+temp/
+tmp/
+backups/
+
+# Capacitor specific
+capacitor.config.ts
+public/android/
+public/ios/
+public/apk/

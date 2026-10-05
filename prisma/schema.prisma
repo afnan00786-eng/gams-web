@@ -1,0 +1,144 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Models
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  role      String   // Was Enum Role
+  mobile    String?  @unique
+  email     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  // trips     Trip[]
+  customers Customer[]
+}
+
+model Vehicle {
+  id        String   @id @default(cuid())
+  number    String   @unique
+  type      String?  // e.g., Truck, Auto, Van
+  createdAt DateTime @default(now())
+}
+
+model Stock {
+  id        String   @id @default(cuid())
+  type      String   @unique // "Domestic", "Commercial", "Small", "Pipe"
+  weight    String   // "14.2 kg", "19 kg", etc.
+  full      Int      @default(0)
+  empty     Int      @default(0)
+  defective Int      @default(0)
+  isCylinder Boolean @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+model Trip {
+  id                   String   @id @default(cuid())
+  vehicleNo            String
+  driverName           String
+  destination          String
+  stockItems           String   @default("[]") // Stores array of { type, weight, out, inFull, inEmpty, inDefective }
+  expenses             String   @default("[]") // Stores array of { type, name?, mobile?, amount }
+  status               String   @default("OUT") // "OUT", "COMPLETED"
+  timeOut              DateTime @default(now())
+  timeIn               DateTime?
+  isConfirmedByHawker  Boolean  @default(false)
+  isConfirmedByGodown  Boolean  @default(false)
+  updatedAt            DateTime @updatedAt
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  type        String   // "RECEIVE", "SEND", "ADJUST", "UNDO"
+  quantity    Int      @default(0)
+  description String?
+  data        String   @default("[]") // JSON array of items changed
+  date        DateTime @default(now())
+  isUndone    Boolean  @default(false)
+}
+
+model DailyStock {
+  id        String   @id @default(cuid())
+  date      DateTime // The specific day this snapshot belongs to (e.g., 2024-02-21T00:00:00Z)
+  type      String   // "Domestic", "Commercial", "Small"
+  weight    String   // "14.2 kg", "19 kg", etc.
+  full      Int      @default(0)
+  empty     Int      @default(0)
+  defective Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([date, type]) // Ensure only one snapshot per stock type per day
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  mobile    String?
+  address   String?
+  
+  // Link to the Hawker who manages this customer
+  hawkerId  String
+  hawker    User     @relation(fields: [hawkerId], references: [id])
+  
+  // Current Outstanding Balances
+  emptyBal  Int      @default(0)  // How many empty cylinders the customer owes
+  cashBal   Float    @default(0)  // How much money the customer owes
+  
+  transactions CustomerTransaction[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model CustomerTransaction {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  
+  date       DateTime @default(now())
+  type       String   // e.g., "GIVEN_FULL", "RECEIVED_EMPTY", "CASH_PAYMENT", "CASH_DUE", "ADJUST"
+  
+  // Details
+  cylinders  Int      @default(0)
+  amount     Float    @default(0)
+  note       String?
+  
+  // Optional link to the Trip during which this transaction occurred
+  tripId     String?
+}
+
+model OfflineArea {
+  id        String   @id @default(cuid())
+  name      String
+  hawker    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OfflineBooking {
+  id            String   @id @default(cuid())
+  areaId        String?
+  priority      String?  // "Normal", "Urgent"
+  name          String?
+  date          String?
+  cylinders     Int?
+  isDirectOrder Boolean  @default(false)
+  address       String
+  mobile        String
+  status        String   @default("UD") // "UD", "Done", "NR"
+  timestamp     Float    // Use Float to store JS Date.now() or map it effectively
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
