@@ -13,14 +13,27 @@ const pwaConfig = withPWA({
     },
     runtimeCaching: [
         {
-            // All app pages - StaleWhileRevalidate (serve cache, update in background)
-            urlPattern: /^https:\/\/gams-app\.vercel\.app\/.*/,
-            handler: 'StaleWhileRevalidate',
+            // Match ANY HTML page navigation across all domains (Vercel, custom domain, localhost)
+            urlPattern: ({ request }) => request.mode === 'navigate',
+            handler: 'NetworkFirst',
             options: {
                 cacheName: 'gams-pages-cache',
                 expiration: {
-                    maxEntries: 50,
-                    maxAgeSeconds: 86400 * 7,
+                    maxEntries: 100,
+                    maxAgeSeconds: 86400 * 30, // 30 days
+                },
+                networkTimeoutSeconds: 3,
+            },
+        },
+        {
+            // Next.js static files and chunks
+            urlPattern: /_next\/static\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+                cacheName: 'gams-next-static',
+                expiration: {
+                    maxEntries: 200,
+                    maxAgeSeconds: 86400 * 30,
                 },
             },
         },
@@ -31,10 +44,10 @@ const pwaConfig = withPWA({
             options: {
                 cacheName: 'gams-api-cache',
                 expiration: {
-                    maxEntries: 100,
-                    maxAgeSeconds: 86400,
+                    maxEntries: 150,
+                    maxAgeSeconds: 86400 * 7,
                 },
-                networkTimeoutSeconds: 5,
+                networkTimeoutSeconds: 3,
             },
         },
         {
@@ -44,7 +57,7 @@ const pwaConfig = withPWA({
             options: {
                 cacheName: 'gams-static-cache',
                 expiration: {
-                    maxEntries: 200,
+                    maxEntries: 250,
                     maxAgeSeconds: 86400 * 30,
                 },
             },
