@@ -36,7 +36,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
         // 2. Pre-cache essential app routes in Cache Storage for offline use
         if (typeof window !== 'undefined' && 'caches' in window && navigator.onLine) {
-            caches.open('gams-pages-cache').then((cache) => {
+            caches.open('gams-v3-cache').then((cache) => {
                 const essentialRoutes = [
                     '/',
                     '/login',
