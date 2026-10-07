@@ -70,9 +70,13 @@ export const useAuthStore = create<AuthState>()(
                     const res = await offlineFetch('/api/employees');
                     if (res.ok) {
                         const employees = await res.json();
-                        set({ employees });
+                        if (Array.isArray(employees) && employees.length > 0) {
+                            set({ employees });
+                        }
                     }
-                } catch (e) { console.error(e) }
+                } catch (e) {
+                    console.error("fetchEmployees offline fallback:", e);
+                }
             },
 
             addEmployee: async (employee) => {
@@ -121,7 +125,11 @@ export const useAuthStore = create<AuthState>()(
         }),
         {
             name: 'gams-auth-storage',
-            partialize: (state) => ({ user: state.user, isAuthenticated: state.isAuthenticated }), // Only persist session, not data which should change
+            partialize: (state) => ({
+                user: state.user,
+                isAuthenticated: state.isAuthenticated,
+                employees: state.employees
+            }),
         }
     )
 );

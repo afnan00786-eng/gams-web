@@ -29,24 +29,25 @@ interface StockState {
 export const useStockStore = create<StockState>()(
     persist(
         (set, get) => ({
-            stock: [], // Initial empty, fetch from API
+            stock: [],
             lastBatchUpdate: null,
 
             fetchStock: async (date?: Date) => {
                 try {
                     let url = '/api/stock';
                     if (date) {
-                        // Using ISO string to reliably pass the date part
                         url += `?date=${date.toISOString()}`;
                     }
 
                     const res = await offlineFetch(url);
                     if (res.ok) {
                         const data = await res.json();
-                        set({ stock: data });
+                        if (Array.isArray(data) && data.length > 0) {
+                            set({ stock: data });
+                        }
                     }
                 } catch (e) {
-                    console.error("Failed to fetch stock", e);
+                    console.error("Failed to fetch stock, keeping existing cache:", e);
                 }
             },
 
@@ -59,25 +60,34 @@ export const useStockStore = create<StockState>()(
                 }));
 
                 try {
-                    const res = await offlineFetch('/api/stock', {
+                    await offlineFetch('/api/stock', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ type, field, value }),
                     });
-
-                    if (!res.ok) {
-                        // Revert on failure? For now just log
-                        console.error("Failed to persist stock update");
-                        // Ideally we should revert here by refetching
-                        get().fetchStock();
-                    }
                 } catch (e) {
-                    console.error(e);
-                    get().fetchStock();
+                    console.error("Stock update error:", e);
                 }
             },
 
             addStockItem: async (type, weight, isCylinder, date?: Date) => {
+                const newItem: CylinderStock = {
+                    type,
+                    weight,
+                    full: 0,
+                    empty: 0,
+                    defective: 0,
+                    isCylinder,
+                    openingFull: 0,
+                    openingEmpty: 0,
+                    openingDefective: 0
+                };
+
+                // Optimistically add to store immediately
+                set((state) => ({
+                    stock: [...state.stock.filter(s => s.type !== type), newItem]
+                }));
+
                 try {
                     const res = await offlineFetch('/api/stock', {
                         method: 'PUT',
@@ -91,21 +101,40 @@ export const useStockStore = create<StockState>()(
                     });
 
                     if (res.ok) {
-                        const newItem = await res.json();
-                        set((state) => ({
-                            stock: [...state.stock, newItem]
-                        }));
-                    } else {
-                        console.error("Failed to add new stock item");
+                        const serverItem = await res.json();
+                        if (serverItem && serverItem.type) {
+                            set((state) => ({
+                                stock: state.stock.map(s => s.type === type ? serverItem : s)
+                            }));
+                        }
                     }
                 } catch (e) {
-                    console.error(e);
+                    console.error("Error adding stock item:", e);
                 }
             },
 
             bulkUpdateStock: async (updates, date?: Date) => {
+                // 1. Immediate optimistic update on screen!
+                set((state) => {
+                    const updatedStock = state.stock.map((item) => {
+                        const update = updates.find((u) => u.type === item.type);
+                        if (!update) return item;
+                        return {
+                            ...item,
+                            full: Math.max(0, item.full + (update.fullChange || 0)),
+                            empty: Math.max(0, item.empty + (update.emptyChange || 0)),
+                            defective: Math.max(0, item.defective + (update.defectiveChange || 0)),
+                        };
+                    });
+                    return {
+                        stock: updatedStock,
+                        lastBatchUpdate: { updates, date }
+                    };
+                });
+
+                // 2. Queue or send to API
                 try {
-                    const res = await offlineFetch('/api/stock', {
+                    await offlineFetch('/api/stock', {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -113,15 +142,8 @@ export const useStockStore = create<StockState>()(
                             date: date ? date.toISOString() : undefined
                         }),
                     });
-
-                    if (res.ok) {
-                        set({ lastBatchUpdate: { updates, date } });
-                        get().fetchStock();
-                    } else {
-                        console.error("Failed to perform bulk stock update");
-                    }
                 } catch (e) {
-                    console.error("Bulk update error:", e);
+                    console.error("Bulk update network error:", e);
                 }
             },
 
@@ -136,8 +158,23 @@ export const useStockStore = create<StockState>()(
                     defectiveChange: u.defectiveChange ? -u.defectiveChange : 0,
                 }));
 
+                // Optimistically revert local stock
+                set((state) => {
+                    const revertedStock = state.stock.map((item) => {
+                        const update = negatedUpdates.find((u) => u.type === item.type);
+                        if (!update) return item;
+                        return {
+                            ...item,
+                            full: Math.max(0, item.full + (update.fullChange || 0)),
+                            empty: Math.max(0, item.empty + (update.emptyChange || 0)),
+                            defective: Math.max(0, item.defective + (update.defectiveChange || 0)),
+                        };
+                    });
+                    return { stock: revertedStock, lastBatchUpdate: null };
+                });
+
                 try {
-                    const res = await offlineFetch('/api/stock', {
+                    await offlineFetch('/api/stock', {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -146,56 +183,46 @@ export const useStockStore = create<StockState>()(
                             isUndo: true
                         }),
                     });
-
-                    if (res.ok) {
-                        set({ lastBatchUpdate: null });
-                        get().fetchStock();
-                    } else {
-                        console.error("Failed to undo last batch update");
-                    }
                 } catch (e) {
                     console.error("Undo error:", e);
                 }
             },
 
             deleteStockItem: async (type: string) => {
+                set((state) => ({
+                    stock: state.stock.filter((s) => s.type !== type)
+                }));
+
                 try {
-                    const res = await offlineFetch(`/api/stock?id=${encodeURIComponent(type)}`, {
+                    await offlineFetch(`/api/stock?id=${encodeURIComponent(type)}`, {
                         method: 'DELETE',
                     });
-
-                    if (res.ok) {
-                        set((state) => ({
-                            stock: state.stock.filter((s) => s.type !== type)
-                        }));
-                        get().fetchStock();
-                    } else {
-                        console.error("Failed to delete stock item");
-                    }
                 } catch (e) {
-                    console.error("Delete error:", e);
+                    console.error("Failed to delete stock item:", e);
                 }
             },
 
             editStockItem: async (oldType: string, newType: string, newWeight: string, newIsCylinder: boolean) => {
+                set((state) => ({
+                    stock: state.stock.map((s) =>
+                        s.type === oldType
+                            ? { ...s, type: newType, weight: newWeight, isCylinder: newIsCylinder }
+                            : s
+                    )
+                }));
+
                 try {
-                    const res = await offlineFetch('/api/stock', {
-                        method: 'PATCH',
+                    await offlineFetch('/api/stock', {
+                        method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            action: 'edit',
+                            editType: true,
                             oldType,
                             newType,
                             newWeight,
                             newIsCylinder
                         }),
                     });
-
-                    if (res.ok) {
-                        get().fetchStock();
-                    } else {
-                        console.error("Failed to edit stock item");
-                    }
                 } catch (e) {
                     console.error("Edit error:", e);
                 }
@@ -203,7 +230,10 @@ export const useStockStore = create<StockState>()(
         }),
         {
             name: 'gams-stock-storage',
-            partialize: (state) => ({ stock: [] }), // Don't persist stock in local storage, always fetch
+            partialize: (state) => ({
+                stock: state.stock,
+                lastBatchUpdate: state.lastBatchUpdate
+            }),
         }
     )
 );

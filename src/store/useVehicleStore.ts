@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { offlineFetch } from '@/lib/offlineFetch';
 
 export interface Vehicle {
     id: string;
@@ -16,57 +18,77 @@ interface VehicleState {
     removeVehicle: (id: string) => Promise<void>;
 }
 
-export const useVehicleStore = create<VehicleState>((set, get) => ({
-    vehicles: [],
-    isLoading: false,
-    error: null,
+export const useVehicleStore = create<VehicleState>()(
+    persist(
+        (set, get) => ({
+            vehicles: [],
+            isLoading: false,
+            error: null,
 
-    fetchVehicles: async () => {
-        set({ isLoading: true });
-        try {
-            const response = await fetch('/api/vehicles');
-            if (response.ok) {
-                const data = await response.json();
-                set({ vehicles: data, error: null });
-            } else {
-                set({ error: 'Failed to fetch vehicles' });
-            }
-        } catch (error) {
-            set({ error: 'An error occurred' });
-        } finally {
-            set({ isLoading: false });
-        }
-    },
+            fetchVehicles: async () => {
+                set({ isLoading: true });
+                try {
+                    const response = await offlineFetch('/api/vehicles');
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (Array.isArray(data) && data.length > 0) {
+                            set({ vehicles: data, error: null });
+                        }
+                    } else {
+                        set({ error: 'Failed to fetch vehicles' });
+                    }
+                } catch (error) {
+                    console.warn("fetchVehicles offline fallback:", error);
+                } finally {
+                    set({ isLoading: false });
+                }
+            },
 
-    addVehicle: async (data) => {
-        try {
-            const response = await fetch('/api/vehicles', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data),
-            });
-            if (response.ok) {
-                await get().fetchVehicles();
-            } else {
-                const errData = await response.json();
-                alert(errData.error || 'Failed to add vehicle');
-            }
-        } catch (error) {
-            console.error('Error adding vehicle', error);
-        }
-    },
+            addVehicle: async (data) => {
+                const tempVehicle: Vehicle = {
+                    id: 'veh_' + Date.now().toString(36),
+                    number: data.number,
+                    type: data.type || null,
+                    createdAt: new Date().toISOString()
+                };
 
-    removeVehicle: async (id: string) => {
-        if (!confirm('Are you sure you want to delete this vehicle?')) return;
-        try {
-            const response = await fetch(`/api/vehicles/${id}`, {
-                method: 'DELETE',
-            });
-            if (response.ok) {
-                await get().fetchVehicles();
+                set((state) => ({
+                    vehicles: [...state.vehicles, tempVehicle]
+                }));
+
+                try {
+                    const response = await offlineFetch('/api/vehicles', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data),
+                    });
+                    if (response.ok && navigator.onLine) {
+                        await get().fetchVehicles();
+                    }
+                } catch (error) {
+                    console.error('Offline vehicle add queued:', error);
+                }
+            },
+
+            removeVehicle: async (id: string) => {
+                if (!confirm('Are you sure you want to delete this vehicle?')) return;
+                set((state) => ({
+                    vehicles: state.vehicles.filter(v => v.id !== id)
+                }));
+                try {
+                    await offlineFetch(`/api/vehicles/${id}`, {
+                        method: 'DELETE',
+                    });
+                } catch (error) {
+                    console.error('Offline vehicle delete queued:', error);
+                }
             }
-        } catch (error) {
-            console.error('Error deleting vehicle', error);
+        }),
+        {
+            name: 'gams-vehicle-storage',
+            partialize: (state) => ({
+                vehicles: state.vehicles
+            }),
         }
-    }
-}));
+    )
+);

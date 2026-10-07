@@ -35,7 +35,7 @@ interface TripState {
 export const useTripStore = create<TripState>()(
     persist(
         (set, get) => ({
-            trips: [], // Initial empty
+            trips: [],
             activeTrips: 0,
 
             fetchTrips: async (date?: Date) => {
@@ -47,17 +47,33 @@ export const useTripStore = create<TripState>()(
                     const res = await offlineFetch(url);
                     if (res.ok) {
                         const data = await res.json();
-                        set({
-                            trips: data,
-                            activeTrips: data.filter((t: Trip) => t.status === 'OUT').length
-                        });
+                        if (Array.isArray(data)) {
+                            set({
+                                trips: data,
+                                activeTrips: data.filter((t: Trip) => t.status === 'OUT').length
+                            });
+                        }
                     }
                 } catch (e) {
-                    console.error("Failed to fetch trips", e);
+                    console.error("Failed to fetch trips, keeping offline cache:", e);
                 }
             },
 
             startTrip: async (tripData) => {
+                // 1. Optimistically create new trip in state immediately!
+                const tempTrip: Trip = {
+                    id: 'trip_' + Date.now().toString(36),
+                    ...tripData,
+                    status: 'OUT',
+                    timeOut: new Date().toISOString()
+                };
+
+                set((state) => ({
+                    trips: [tempTrip, ...state.trips],
+                    activeTrips: state.activeTrips + 1
+                }));
+
+                // 2. Send or queue for background sync
                 try {
                     const res = await offlineFetch('/api/trips', {
                         method: 'POST',
@@ -65,67 +81,88 @@ export const useTripStore = create<TripState>()(
                         headers: { 'Content-Type': 'application/json' }
                     });
 
-                    if (res.ok) {
-                        await get().fetchTrips(); // Refresh to get real ID and DB state immediately
-                    } else {
-                        console.error("Failed to start trip API");
+                    if (res.ok && navigator.onLine) {
+                        get().fetchTrips();
                     }
                 } catch (e) {
-                    console.error("Error starting trip:", e);
+                    console.error("Offline trip start queued:", e);
                 }
             },
 
             completeTrip: async (id, returnedItems, expenses) => {
+                // 1. Optimistically update trip status to COMPLETED immediately!
+                set((state) => {
+                    const updatedTrips = state.trips.map((t) => {
+                        if (t.id !== id) return t;
+                        return {
+                            ...t,
+                            status: 'COMPLETED' as const,
+                            timeIn: new Date().toISOString(),
+                            expenses: JSON.stringify(expenses)
+                        };
+                    });
+                    return {
+                        trips: updatedTrips,
+                        activeTrips: Math.max(0, state.activeTrips - 1)
+                    };
+                });
+
+                // 2. Send or queue for sync
                 try {
                     const res = await offlineFetch('/api/trips', {
                         method: 'PATCH',
                         body: JSON.stringify({ id, returnedItems, expenses }),
                         headers: { 'Content-Type': 'application/json' }
                     });
-                    if (res.ok) {
-                        await get().fetchTrips();
-                    } else {
-                        console.error("Failed to complete trip API");
+
+                    if (res.ok && navigator.onLine) {
+                        get().fetchTrips();
                     }
                 } catch (e) {
-                    console.error("Error completing trip:", e);
+                    console.error("Offline trip complete queued:", e);
                 }
             },
 
             deleteTrip: async (id) => {
+                set((state) => {
+                    const remaining = state.trips.filter((t) => t.id !== id);
+                    return {
+                        trips: remaining,
+                        activeTrips: remaining.filter((t) => t.status === 'OUT').length
+                    };
+                });
+
                 try {
-                    const res = await offlineFetch(`/api/trips?id=${id}`, {
+                    await offlineFetch(`/api/trips?id=${id}`, {
                         method: 'DELETE'
                     });
-                    if (res.ok) {
-                        await get().fetchTrips();
-                    } else {
-                        console.error("Failed to delete trip API");
-                    }
                 } catch (e) {
-                    console.error("Error deleting trip:", e);
+                    console.error("Offline trip delete queued:", e);
                 }
             },
+
             updateTrip: async (id, tripData) => {
+                set((state) => ({
+                    trips: state.trips.map((t) => t.id === id ? { ...t, ...tripData } : t)
+                }));
+
                 try {
-                    const res = await offlineFetch('/api/trips', {
+                    await offlineFetch('/api/trips', {
                         method: 'PUT',
                         body: JSON.stringify({ id, ...tripData }),
                         headers: { 'Content-Type': 'application/json' }
                     });
-                    if (res.ok) {
-                        await get().fetchTrips();
-                    } else {
-                        console.error("Failed to update trip API");
-                    }
                 } catch (e) {
-                    console.error("Error updating trip:", e);
+                    console.error("Offline trip update queued:", e);
                 }
             },
         }),
         {
             name: 'gams-trip-storage',
-            partialize: (state) => ({ trips: [] }), // Don't persist, always fetch
+            partialize: (state) => ({
+                trips: state.trips,
+                activeTrips: state.activeTrips
+            }),
         }
     )
 );

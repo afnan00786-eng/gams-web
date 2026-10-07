@@ -2,11 +2,8 @@
  * offlineFetch.ts
  *
  * A drop-in replacement for fetch() that:
- * - For GET: tries network, falls back to cache on failure (existing data shown)
- * - For POST/PATCH/PUT/DELETE: if offline, queues the action for later sync
- *
- * IMPORTANT: This does NOT change how data is processed — only whether it's
- * sent now or queued for later. All existing store logic remains unchanged.
+ * - For GET: tries network, falls back to cache on failure or if offline.
+ * - For POST/PATCH/PUT/DELETE: if offline or if network fails, queues the action in IndexedDB.
  */
 
 import { enqueueAction } from './offlineQueue';
@@ -29,6 +26,14 @@ export async function offlineFetch(
 
 /** Try network first, fall back to cache for GET requests */
 async function fetchWithFallback(url: string, options?: RequestInit): Promise<Response> {
+    // If offline, serve immediately from cache without delay
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        const cached = await getCachedResponse(url);
+        if (cached) {
+            return cached;
+        }
+    }
+
     try {
         const res = await fetch(url, options);
         if (res.ok) {
@@ -37,35 +42,35 @@ async function fetchWithFallback(url: string, options?: RequestInit): Promise<Re
         }
         return res;
     } catch (e) {
-        // Offline - try to return cached data
+        // Offline or connection drop - return cached data
         const cached = await getCachedResponse(url);
         if (cached) {
             console.log('[OfflineFetch] Offline - serving cached data for:', url);
             return cached;
         }
-        throw e; // Let the store handle the error naturally
+        throw e;
     }
 }
 
-/** For mutations: if offline, queue them; if online, send normally */
+/** For mutations: if offline or network fails, queue them in IndexedDB for auto-sync */
 async function mutateWithQueue(
     url: string,
     options?: RequestInit,
     method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST'
 ): Promise<Response> {
-    if (!navigator.onLine) {
-        // Queue for later sync
+    const bodyStr = typeof options?.body === 'string' ? options.body : JSON.stringify(options?.body || {});
+
+    // If offline, queue directly
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
         await enqueueAction({
             method,
             url,
-            body: typeof options?.body === 'string' ? options.body : JSON.stringify(options?.body || {}),
+            body: bodyStr,
             timestamp: Date.now(),
         });
 
-        // Return a fake success response so the store's optimistic path runs
         console.log(`[OfflineFetch] Queued offline action: ${method} ${url}`);
 
-        // Dispatch event so UI can show "saved offline" feedback
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('gams-offline-action', { detail: { method, url } }));
         }
@@ -76,8 +81,29 @@ async function mutateWithQueue(
         });
     }
 
-    // Online - send normally, no change to behavior
-    return fetch(url, options);
+    // If online, attempt network send, but if connection fails, queue for safety
+    try {
+        const res = await fetch(url, options);
+        return res;
+    } catch (netError) {
+        console.warn(`[OfflineFetch] Network failed for ${method} ${url}, saving to offline queue:`, netError);
+
+        await enqueueAction({
+            method,
+            url,
+            body: bodyStr,
+            timestamp: Date.now(),
+        });
+
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('gams-offline-action', { detail: { method, url } }));
+        }
+
+        return new Response(JSON.stringify({ ok: true, offline: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        });
+    }
 }
 
 /** Cache a GET response in Cache API */
@@ -87,7 +113,7 @@ async function cacheResponse(url: string, res: Response): Promise<void> {
         const cache = await caches.open(API_CACHE_KEY);
         await cache.put(url, res);
     } catch (e) {
-        // Cache API not available (e.g., in non-secure context), silently ignore
+        // Silently ignore if Cache API is unavailable
     }
 }
 

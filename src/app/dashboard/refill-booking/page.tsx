@@ -46,6 +46,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { SectionGuard } from "@/components/auth/SectionGuard";
+import { offlineFetch } from "@/lib/offlineFetch";
 
 // Types
 interface Area {
@@ -108,15 +109,15 @@ export default function OfflineBookingPage() {
         if (!isLoaded) return;
         const fetchRemoteData = async () => {
             try {
-                const resAreas = await fetch('/api/offline-areas');
+                const resAreas = await offlineFetch('/api/offline-areas');
                 if (resAreas.ok) {
                     const dataAreas = await resAreas.json();
-                    if (dataAreas.length > 0) setAreas(dataAreas);
+                    if (Array.isArray(dataAreas) && dataAreas.length > 0) setAreas(dataAreas);
                 }
-                const resBookings = await fetch('/api/offline-bookings');
+                const resBookings = await offlineFetch('/api/offline-bookings');
                 if (resBookings.ok) {
                     const dataBookings = await resBookings.json();
-                    if (dataBookings.length > 0) setBookings(dataBookings);
+                    if (Array.isArray(dataBookings) && dataBookings.length > 0) setBookings(dataBookings);
                 }
             } catch (e) {
                 console.error("Offline: Using local storage");
@@ -173,11 +174,11 @@ export default function OfflineBookingPage() {
         setBookings(prev => prev.map(b => b.id === confirmAction.bookingId ? { ...b, status: confirmAction.type, updatedAt: Date.now() } : b));
         toast.success(`Booking marked as ${confirmAction.type === "Done" ? "Delivered" : "Not Reachable"}`);
         
-        fetch('/api/offline-bookings', {
+        offlineFetch('/api/offline-bookings', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: confirmAction.bookingId, status: confirmAction.type })
-        }).catch(() => console.log('Status saved offline'));
+        }).catch(() => console.log('Status queued offline'));
         
         setConfirmAction(null);
     };
@@ -195,11 +196,11 @@ export default function OfflineBookingPage() {
         setIsRemoveAreaOpen(false);
         toast.success("Area removed successfully!");
 
-        fetch('/api/offline-areas', {
+        offlineFetch('/api/offline-areas', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: areaToRemove })
-        }).catch(() => console.log('Deleted offline'));
+        }).catch(() => console.log('Delete queued offline'));
     };
 
     const handleSaveArea = () => {
@@ -219,7 +220,7 @@ export default function OfflineBookingPage() {
         setIsAddAreaOpen(false);
         toast.success("Area added successfully!");
 
-        fetch('/api/offline-areas', {
+        offlineFetch('/api/offline-areas', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(area)
@@ -252,7 +253,7 @@ export default function OfflineBookingPage() {
         setIsAddBookingOpen(false);
         toast.success("Booking added successfully!");
 
-        fetch('/api/offline-bookings', {
+        offlineFetch('/api/offline-bookings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(booking)
@@ -292,7 +293,7 @@ export default function OfflineBookingPage() {
         setIsBookOrderOpen(false);
         toast.success("Order booked successfully!");
 
-        fetch('/api/offline-bookings', {
+        offlineFetch('/api/offline-bookings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(booking)

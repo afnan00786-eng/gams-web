@@ -30,6 +30,7 @@ import { generateAccountReport, generateWhatsAppLink, cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { CapacitorBackButton } from "@/components/CapacitorBackButton";
 import { SectionGuard } from "@/components/auth/SectionGuard";
+import { offlineFetch } from "@/lib/offlineFetch";
 
 export default function HawkerAccountsPage() {
     const { employees, user, fetchEmployees } = useAuthStore();
@@ -38,7 +39,33 @@ export default function HawkerAccountsPage() {
     const [selectedHawkerId, setSelectedHawkerId] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
 
-    const { data: dbSummary, mutate: mutateSummary } = useSWR('/api/hawkers/ledger-summary', (url) => fetch(url).then(r => r.json()));
+    const [localSummary, setLocalSummary] = useState<any[]>(() => {
+        try {
+            const saved = typeof window !== 'undefined' ? localStorage.getItem("gams_hawker_summary_cache") : null;
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
+
+    const { data: remoteSummary, mutate: mutateSummary } = useSWR('/api/hawkers/ledger-summary', async (url) => {
+        try {
+            const res = await offlineFetch(url);
+            if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data)) {
+                    if (typeof window !== 'undefined') {
+                        localStorage.setItem("gams_hawker_summary_cache", JSON.stringify(data));
+                    }
+                    setLocalSummary(data);
+                }
+                return data;
+            }
+        } catch (e) {
+            console.warn("Ledger summary offline fallback:", e);
+        }
+        return localSummary;
+    });
+
+    const dbSummary = remoteSummary || localSummary;
 
     useEffect(() => {
         fetchEmployees();
