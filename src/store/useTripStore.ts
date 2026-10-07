@@ -73,11 +73,11 @@ export const useTripStore = create<TripState>()(
                     activeTrips: state.activeTrips + 1
                 }));
 
-                // 2. Send or queue for background sync
+                // 2. Send or queue for background sync with client id
                 try {
                     const res = await offlineFetch('/api/trips', {
                         method: 'POST',
-                        body: JSON.stringify(tripData),
+                        body: JSON.stringify({ id: tempTrip.id, ...tripData }),
                         headers: { 'Content-Type': 'application/json' }
                     });
 
@@ -90,14 +90,28 @@ export const useTripStore = create<TripState>()(
             },
 
             completeTrip: async (id, returnedItems, expenses) => {
-                // 1. Optimistically update trip status to COMPLETED immediately!
+                const targetTrip = get().trips.find(t => t.id === id);
+
+                // 1. Optimistically update trip status and merged stockItems immediately!
                 set((state) => {
                     const updatedTrips = state.trips.map((t) => {
                         if (t.id !== id) return t;
+
+                        let prevStock: any[] = [];
+                        try {
+                            prevStock = JSON.parse(t.stockItems || '[]');
+                        } catch { }
+
+                        const mergedStock = prevStock.map((p: any) => {
+                            const ret = returnedItems.find((r: any) => r.type === p.type);
+                            return ret ? { ...p, ...ret } : p;
+                        });
+
                         return {
                             ...t,
                             status: 'COMPLETED' as const,
                             timeIn: new Date().toISOString(),
+                            stockItems: JSON.stringify(mergedStock.length > 0 ? mergedStock : returnedItems),
                             expenses: JSON.stringify(expenses)
                         };
                     });
@@ -111,7 +125,12 @@ export const useTripStore = create<TripState>()(
                 try {
                     const res = await offlineFetch('/api/trips', {
                         method: 'PATCH',
-                        body: JSON.stringify({ id, returnedItems, expenses }),
+                        body: JSON.stringify({
+                            id,
+                            driverName: targetTrip?.driverName,
+                            returnedItems,
+                            expenses
+                        }),
                         headers: { 'Content-Type': 'application/json' }
                     });
 

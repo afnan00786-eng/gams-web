@@ -5,7 +5,7 @@
  * Provides 100% offline access to all app routes, static assets, and cached API data.
  */
 
-const CACHE_NAME = 'gams-v3-cache';
+const CACHE_NAME = 'gams-v4-cache';
 
 const PRECACHE_ASSETS = [
     '/',

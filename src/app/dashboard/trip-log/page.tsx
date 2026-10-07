@@ -45,8 +45,14 @@ export default function TripLogPage() {
     const isSameDay = (a: Date, b: Date) => toLocalDateStr(a) === toLocalDateStr(b);
 
     const tripMatchesDate = (trip: any) => {
-        const tripDate = new Date(trip.timeOut);
-        return toLocalDateStr(tripDate) === toLocalDateStr(selectedDate);
+        const targetStr = toLocalDateStr(selectedDate);
+        if (trip.timeOut && toLocalDateStr(new Date(trip.timeOut)) === targetStr) {
+            return true;
+        }
+        if (trip.timeIn && toLocalDateStr(new Date(trip.timeIn)) === targetStr) {
+            return true;
+        }
+        return false;
     };
 
     const updateStockState = (type: string, updates: any) => {

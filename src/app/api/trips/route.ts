@@ -20,10 +20,21 @@ export async function GET(request: Request) {
 
             const trips = await prisma.trip.findMany({
                 where: {
-                    timeOut: {
-                        gte: startDate,
-                        lt: endDate
-                    }
+                    OR: [
+                        { status: 'OUT' }, // Always fetch ALL active trips
+                        {
+                            timeOut: {
+                                gte: startDate,
+                                lt: endDate
+                            }
+                        },
+                        {
+                            timeIn: {
+                                gte: startDate,
+                                lt: endDate
+                            }
+                        }
+                    ]
                 },
                 orderBy: { timeOut: 'desc' }
             });
@@ -43,7 +54,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { vehicleNo, driverName, destination, stockItems } = body;
+        const { id, vehicleNo, driverName, destination, stockItems } = body;
 
         let parsedStockItems: any[] = [];
         if (typeof stockItems === 'string') {
@@ -53,15 +64,20 @@ export async function POST(request: Request) {
         }
 
         const result = await prisma.$transaction(async (tx) => {
-            // 1. Create Trip
+            // 1. Create Trip (preserve client id if provided, e.g. for offline sync continuity)
+            const tripData: any = {
+                vehicleNo,
+                driverName,
+                destination,
+                stockItems: JSON.stringify(parsedStockItems),
+                status: 'OUT'
+            };
+            if (id) {
+                tripData.id = id;
+            }
+
             const trip = await tx.trip.create({
-                data: {
-                    vehicleNo,
-                    driverName,
-                    destination,
-                    stockItems: JSON.stringify(parsedStockItems),
-                    status: 'OUT'
-                }
+                data: tripData
             });
 
             // 2. Reduce Stock for each item
@@ -133,11 +149,39 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
     try {
         const body = await request.json();
-        const { id, returnedItems, expenses } = body;
+        const { id, returnedItems = [], expenses = [] } = body;
 
         const result = await prisma.$transaction(async (tx) => {
-            const existingTrip = await tx.trip.findUnique({ where: { id } });
+            // Find trip: try exact id first, else fallback if offline/temp id
+            let existingTrip = id ? await tx.trip.findUnique({ where: { id } }) : null;
+            if (!existingTrip && id) {
+                // Try finding by driverName / vehicleNo if temporary offline id was used
+                existingTrip = await tx.trip.findFirst({
+                    where: {
+                        OR: [
+                            { id },
+                            { driverName: body.driverName || undefined, status: 'OUT' }
+                        ]
+                    },
+                    orderBy: { timeOut: 'desc' }
+                });
+            }
+            if (!existingTrip) {
+                // Fallback to most recent active trip
+                existingTrip = await tx.trip.findFirst({
+                    where: { status: 'OUT' },
+                    orderBy: { timeOut: 'desc' }
+                });
+            }
+
             if (!existingTrip) throw new Error("Trip not found");
+
+            // If already completed (idempotent sync retry), return existing trip immediately
+            if (existingTrip.status === 'COMPLETED') {
+                return existingTrip;
+            }
+
+            const tripId = existingTrip.id;
 
             let prevItems: any[] = [];
             try {
@@ -173,21 +217,29 @@ export async function PATCH(request: Request) {
                 return p;
             });
 
-            // 1. Update Trip (known fields via Prisma, expenses via raw SQL to avoid stale client issues)
+            // Also include any items in returnedItems that were not in prevItems
+            for (const ret of returnedItems) {
+                if (!updatedItems.some((u: any) => u.type === ret.type)) {
+                    updatedItems.push(ret);
+                }
+            }
+
+            // 1. Update Trip
             const trip = await tx.trip.update({
-                where: { id },
+                where: { id: tripId },
                 data: {
                     status: 'COMPLETED',
                     timeIn: new Date(),
-                    stockItems: JSON.stringify(updatedItems)
+                    stockItems: JSON.stringify(updatedItems),
+                    expenses: JSON.stringify(expenses || [])
                 }
             });
 
             // Save expenses using raw SQL (safe even if Prisma client is stale)
             try {
-                await tx.$executeRaw`UPDATE "Trip" SET "expenses" = ${JSON.stringify(expenses || [])} WHERE "id" = ${id}`;
+                await tx.$executeRaw`UPDATE "Trip" SET "expenses" = ${JSON.stringify(expenses || [])} WHERE "id" = ${tripId}`;
             } catch (e) {
-                // If column doesn't exist yet (migration pending), silently skip
+                // Silently skip if column issue
             }
 
             // 2. Update Stock (Add returned items)
@@ -195,6 +247,7 @@ export async function PATCH(request: Request) {
             today.setUTCHours(0, 0, 0, 0);
 
             for (const ret of returnedItems) {
+                if (!ret || !ret.type) continue;
                 const out = ret.out || 0;
                 const full = ret.inFull || 0;
                 const def = ret.inDefective || 0;
@@ -213,183 +266,154 @@ export async function PATCH(request: Request) {
                 const takenEmpty = transfers.filter((t: any) => t.type === 'Taken' && t.condition === 'Empty').reduce((s: number, t: any) => s + (t.qty || 0), 0);
 
                 // Required empties = what hawker's own customers owed back
-                // = Out - Returned Full - Defective - NC - Filled Given + Filled Taken
                 const requiredEmpty = Math.max(0, out - full - def - nc - givenFilled + takenFilled);
-
-                // Total empties to return to godown physically:
-                // = Required + Swapped Empties (givenFilled - takenFilled) + Direct Empties (takenEmpty - givenEmpty) + Extra Empty - Shortage (emptyBal)
                 const emptyReturnedToGodown = isCylinder ? (requiredEmpty + givenFilled - takenFilled + takenEmpty - givenEmpty + extra - bal) : 0;
 
-                const updatedStock = await tx.stock.update({
-                    where: { type: ret.type },
-                    data: {
-                        full: { increment: full },
-                        empty: { increment: emptyReturnedToGodown },
-                        defective: { increment: def }
-                    }
-                });
-
-                await tx.dailyStock.upsert({
-                    where: {
-                        date_type: {
-                            date: today,
-                            type: ret.type
+                if (stockType) {
+                    const updatedStock = await tx.stock.update({
+                        where: { type: ret.type },
+                        data: {
+                            full: { increment: full },
+                            empty: { increment: emptyReturnedToGodown },
+                            defective: { increment: def }
                         }
-                    },
-                    update: {
-                        full: updatedStock.full,
-                        empty: updatedStock.empty,
-                        defective: updatedStock.defective
-                    },
-                    create: {
-                        date: today,
-                        type: updatedStock.type,
-                        weight: updatedStock.weight,
-                        full: updatedStock.full,
-                        empty: updatedStock.empty,
-                        defective: updatedStock.defective
-                    }
-                });
+                    });
+
+                    await tx.dailyStock.upsert({
+                        where: {
+                            date_type: {
+                                date: today,
+                                type: ret.type
+                            }
+                        },
+                        update: {
+                            full: updatedStock.full,
+                            empty: updatedStock.empty,
+                            defective: updatedStock.defective
+                        },
+                        create: {
+                            date: today,
+                            type: updatedStock.type,
+                            weight: updatedStock.weight,
+                            full: updatedStock.full,
+                            empty: updatedStock.empty,
+                            defective: updatedStock.defective
+                        }
+                    });
+                }
 
                 // --- Handle Customer Transactions (Logistics) ---
                 let shortageCustId = ret.inEmptyBalCustomerId;
                 let extraCustId = ret.inExtraEmptyCustomerId;
 
-                // Auto-create/lookup for manual entries
                 if (!shortageCustId && ret.inEmptyBalName && ret.inEmptyBal > 0) {
                     const cust = await getOrCreateCustomer(tx, existingTrip.driverName, ret.inEmptyBalName, ret.inEmptyBalMobile);
-                    shortageCustId = cust.id;
+                    shortageCustId = cust?.id;
                 }
                 if (!extraCustId && ret.inExtraEmptyName && ret.inExtraEmpty > 0) {
                     const cust = await getOrCreateCustomer(tx, existingTrip.driverName, ret.inExtraEmptyName, ret.inExtraEmptyMobile);
-                    extraCustId = cust.id;
+                    extraCustId = cust?.id;
                 }
 
                 if (shortageCustId && ret.inEmptyBal > 0) {
-                    await tx.customerTransaction.create({
-                        data: {
-                            customerId: shortageCustId,
-                            tripId: id,
-                            type: 'GIVEN_FULL',
-                            cylinders: ret.inEmptyBal,
-                            note: `Shortage from Trip (${existingTrip.vehicleNo}) - ${ret.type}`
-                        }
-                    });
-                    await tx.customer.update({
-                        where: { id: shortageCustId },
-                        data: { emptyBal: { increment: ret.inEmptyBal } }
-                    });
+                    try {
+                        await tx.customerTransaction.create({
+                            data: {
+                                customerId: shortageCustId,
+                                tripId,
+                                type: 'GIVEN_FULL',
+                                cylinders: ret.inEmptyBal,
+                                note: `Shortage from Trip (${existingTrip.vehicleNo}) - ${ret.type}`
+                            }
+                        });
+                        await tx.customer.update({
+                            where: { id: shortageCustId },
+                            data: { emptyBal: { increment: ret.inEmptyBal } }
+                        });
+                    } catch (e) {
+                        console.warn("Non-fatal: customer shortage update failed:", e);
+                    }
                 }
 
                 if (extraCustId && ret.inExtraEmpty > 0) {
-                    await tx.customerTransaction.create({
-                        data: {
-                            customerId: extraCustId,
-                            tripId: id,
-                            type: 'RECEIVED_EMPTY',
-                            cylinders: ret.inExtraEmpty,
-                            note: `Extra Empty from Trip (${existingTrip.vehicleNo}) - ${ret.type}`
-                        }
-                    });
-                    await tx.customer.update({
-                        where: { id: extraCustId },
-                        data: { emptyBal: { decrement: ret.inExtraEmpty } }
-                    });
+                    try {
+                        await tx.customerTransaction.create({
+                            data: {
+                                customerId: extraCustId,
+                                tripId,
+                                type: 'RECEIVED_EMPTY',
+                                cylinders: ret.inExtraEmpty,
+                                note: `Extra Empty from Trip (${existingTrip.vehicleNo}) - ${ret.type}`
+                            }
+                        });
+                        await tx.customer.update({
+                            where: { id: extraCustId },
+                            data: { emptyBal: { decrement: ret.inExtraEmpty } }
+                        });
+                    } catch (e) {
+                        console.warn("Non-fatal: customer extra empty update failed:", e);
+                    }
                 }
 
                 // --- Handle Hawker Transfers ---
-                // NOTE: Transfers are HAWKER-to-HAWKER only. Godown stock is NEVER modified here.
-                // The sender's emptyReturnedToGodown already accounts for the swapped empties above.
                 const pendingTransfers = ret.hawkerTransfers || [];
-                console.log(`[Hawker Transfer] ${ret.type}: ${pendingTransfers.length} transfers to process`);
-
                 for (const t of pendingTransfers) {
-                    // Skip transfers that were already processed instantly by the "Save & Next" button
-                    if (t.isProcessed) {
-                        console.log(`[Hawker Transfer] Skipping already processed transfer:`, t);
-                        continue;
-                    }
+                    if (t.isProcessed || !t.hawkerId || !t.qty || t.qty <= 0) continue;
 
-                    if (!t.hawkerId || !t.qty || t.qty <= 0) {
-                        console.log(`[Hawker Transfer] Skipping invalid transfer:`, t);
-                        continue;
-                    }
+                    try {
+                        const receiverUser = await tx.user.findUnique({ where: { id: t.hawkerId } });
+                        if (!receiverUser) continue;
 
-                    // We now process both 'Filled' and 'Empty'
-                    // if (t.condition !== 'Filled') {
-                    //     console.log(`[Hawker Transfer] Skipping empty-condition transfer (no receiver trip update needed):`, t);
-                    //     continue;
-                    // }
-
-                    const receiverUser = await tx.user.findUnique({ where: { id: t.hawkerId } });
-                    if (!receiverUser) {
-                        console.log(`[Hawker Transfer] Receiver user NOT FOUND: ${t.hawkerId}`);
-                        continue;
-                    }
-                    console.log(`[Hawker Transfer] ${t.type} ${t.qty} ${t.condition} → ${receiverUser.name}`);
-
-                    // Check if receiver has an active trip
-                    let receiverTrip = await tx.trip.findFirst({
-                        where: { driverName: receiverUser.name, status: 'OUT' },
-                        orderBy: { timeOut: 'desc' }
-                    });
-
-                    if (!receiverTrip) {
-                        // Auto-create a clean TRANSFER trip for them.
-                        // vehicleNo = 'TRANSFER' (no real vehicle — just a holding trip)
-                        // stockItems starts with quantity 0; we'll update it right below.
-                        // IMPORTANT: No godown stock is decremented — these cylinders come from the sender.
-                        receiverTrip = await tx.trip.create({
-                            data: {
-                                driverName: receiverUser.name,
-                                vehicleNo: 'TRANSFER',
-                                destination: `Transfer from ${existingTrip.driverName}`,
-                                status: 'OUT',
-                                stockItems: JSON.stringify([{
-                                    type: ret.type,
-                                    quantity: 0,
-                                    weight: '',
-                                    isTransferTrip: true  // flag so UI can mark it clearly
-                                }])
-                            }
+                        let receiverTrip = await tx.trip.findFirst({
+                            where: { driverName: receiverUser.name, status: 'OUT' },
+                            orderBy: { timeOut: 'desc' }
                         });
-                        console.log(`[Hawker Transfer] Created auto-trip for ${receiverUser.name}: ${receiverTrip.id}`);
-                    }
 
-                    // Update Receiver Trip Stock
-                    let recItems: any[] = [];
-                    try { recItems = JSON.parse(receiverTrip.stockItems || "[]"); } catch (e) { }
+                        if (!receiverTrip) {
+                            receiverTrip = await tx.trip.create({
+                                data: {
+                                    driverName: receiverUser.name,
+                                    vehicleNo: 'TRANSFER',
+                                    destination: `Transfer from ${existingTrip.driverName}`,
+                                    status: 'OUT',
+                                    stockItems: JSON.stringify([{
+                                        type: ret.type,
+                                        quantity: 0,
+                                        weight: '',
+                                        isTransferTrip: true
+                                    }])
+                                }
+                            });
+                        }
 
-                    // Find the item row for this type, or create one
-                    let foundItem = recItems.find((i: any) => i.type === ret.type);
-                    if (!foundItem) {
-                        foundItem = { type: ret.type, quantity: 0, weight: '', isTransferTrip: true };
-                        recItems.push(foundItem);
-                    }
+                        let recItems: any[] = [];
+                        try { recItems = JSON.parse(receiverTrip.stockItems || "[]"); } catch (e) { }
 
-                    // "Given" = we gave them cylinders (either Filled or Empty) -> they received it.
-                    // "Taken" = we took cylinders from them (either Filled or Empty) -> they lost it.
-                    if (t.type === 'Given') {
-                        // For empty transfers, we record the quantity received just like filled ones.
-                        // Do NOT mutate quantity (Godown OUT). Let the UI add receivedTransfers dynamically.
-                        if (!foundItem.receivedTransfers) foundItem.receivedTransfers = [];
-                        foundItem.receivedTransfers.push({
-                            id: Date.now().toString() + Math.random().toString(36).substring(7),
-                            from: existingTrip.driverName,
-                            qty: t.qty,
-                            type: ret.type,
-                            condition: t.condition, // Ensure condition is saved so UI knows it's empty
-                            isConfirmed: false
+                        let foundItem = recItems.find((i: any) => i.type === ret.type);
+                        if (!foundItem) {
+                            foundItem = { type: ret.type, quantity: 0, weight: '', isTransferTrip: true };
+                            recItems.push(foundItem);
+                        }
+
+                        if (t.type === 'Given') {
+                            if (!foundItem.receivedTransfers) foundItem.receivedTransfers = [];
+                            foundItem.receivedTransfers.push({
+                                id: Date.now().toString() + Math.random().toString(36).substring(7),
+                                from: existingTrip.driverName,
+                                qty: t.qty,
+                                type: ret.type,
+                                condition: t.condition,
+                                isConfirmed: false
+                            });
+                        }
+
+                        await tx.trip.update({
+                            where: { id: receiverTrip.id },
+                            data: { stockItems: JSON.stringify(recItems) }
                         });
-                    } else if (t.type === 'Taken') {
-                        // Same logic: Do not mutate godown OUT.
+                    } catch (transferErr) {
+                        console.warn("Non-fatal: transfer update failed:", transferErr);
                     }
-
-                    await tx.trip.update({
-                        where: { id: receiverTrip.id },
-                        data: { stockItems: JSON.stringify(recItems) }
-                    });
-                    console.log(`[Hawker Transfer] Updated receiver trip ${receiverTrip.id} → ${ret.type} qty=${foundItem.quantity}`);
                 }
             }
 
@@ -398,40 +422,42 @@ export async function PATCH(request: Request) {
                 let financialCustId = exp.customerId;
                 if (!financialCustId && exp.name && exp.amount > 0) {
                     const cust = await getOrCreateCustomer(tx, existingTrip.driverName, exp.name, exp.mobile);
-                    financialCustId = cust.id;
+                    financialCustId = cust?.id;
                 }
 
                 if (financialCustId && exp.amount > 0) {
-                    if (exp.type === 'Money Bal') {
-                        // Money Bal = Credit (Customer owes this amount)
-                        await tx.customerTransaction.create({
-                            data: {
-                                customerId: financialCustId,
-                                tripId: id,
-                                type: 'CASH_DUE',
-                                amount: exp.amount,
-                                note: `Credit from Trip (${existingTrip.vehicleNo})`
-                            }
-                        });
-                        await tx.customer.update({
-                            where: { id: financialCustId },
-                            data: { cashBal: { increment: exp.amount } }
-                        });
-                    } else if (exp.type === 'Extra Money') {
-                        // Extra Money = Payment (Customer paid this amount)
-                        await tx.customerTransaction.create({
-                            data: {
-                                customerId: financialCustId,
-                                tripId: id,
-                                type: 'CASH_PAYMENT',
-                                amount: exp.amount,
-                                note: `Payment from Trip (${existingTrip.vehicleNo}) - ${exp.name || 'Extra'}`
-                            }
-                        });
-                        await tx.customer.update({
-                            where: { id: financialCustId },
-                            data: { cashBal: { decrement: exp.amount } }
-                        });
+                    try {
+                        if (exp.type === 'Money Bal') {
+                            await tx.customerTransaction.create({
+                                data: {
+                                    customerId: financialCustId,
+                                    tripId,
+                                    type: 'CASH_DUE',
+                                    amount: exp.amount,
+                                    note: `Credit from Trip (${existingTrip.vehicleNo})`
+                                }
+                            });
+                            await tx.customer.update({
+                                where: { id: financialCustId },
+                                data: { cashBal: { increment: exp.amount } }
+                            });
+                        } else if (exp.type === 'Extra Money') {
+                            await tx.customerTransaction.create({
+                                data: {
+                                    customerId: financialCustId,
+                                    tripId,
+                                    type: 'CASH_PAYMENT',
+                                    amount: exp.amount,
+                                    note: `Payment from Trip (${existingTrip.vehicleNo}) - ${exp.name || 'Extra'}`
+                                }
+                            });
+                            await tx.customer.update({
+                                where: { id: financialCustId },
+                                data: { cashBal: { decrement: exp.amount } }
+                            });
+                        }
+                    } catch (finErr) {
+                        console.warn("Non-fatal: financial transaction failed:", finErr);
                     }
                 }
             }
@@ -445,15 +471,19 @@ export async function PATCH(request: Request) {
             })).filter((u: any) => u.fullChange > 0 || u.emptyChange > 0 || u.defectiveChange > 0);
 
             if (returnItemLogs.length > 0) {
-                const totalReturnQty = returnItemLogs.reduce((s: number, i: any) => s + i.fullChange + i.emptyChange + i.defectiveChange, 0);
-                await tx.transaction.create({
-                    data: {
-                        type: 'RECEIVE',
-                        quantity: totalReturnQty,
-                        description: JSON.stringify(returnItemLogs),
-                        date: new Date()
-                    }
-                });
+                try {
+                    const totalReturnQty = returnItemLogs.reduce((s: number, i: any) => s + i.fullChange + i.emptyChange + i.defectiveChange, 0);
+                    await tx.transaction.create({
+                        data: {
+                            type: 'RECEIVE',
+                            quantity: totalReturnQty,
+                            description: JSON.stringify(returnItemLogs),
+                            date: new Date()
+                        }
+                    });
+                } catch (auditErr) {
+                    console.warn("Non-fatal: movement audit failed:", auditErr);
+                }
             }
 
             return trip;
@@ -621,33 +651,49 @@ export async function PUT(request: Request) {
  * Helper to get or create a customer by name and mobile for a specific hawker (driver)
  */
 async function getOrCreateCustomer(tx: any, driverName: string, name: string, mobile?: string) {
-    // 1. Resolve Hawker ID from driver name
-    const hawker = await tx.user.findFirst({
-        where: { name: { equals: driverName, mode: 'insensitive' }, role: 'HAWKER' }
-    });
-    if (!hawker) throw new Error(`Hawker profile not found for name: ${driverName}`);
-
-    // 2. Look for existing customer
-    let customer = await tx.customer.findFirst({
-        where: {
-            hawkerId: hawker.id,
-            name: { equals: name, mode: 'insensitive' },
-            mobile: mobile || null
+    try {
+        const cleanDriver = driverName?.trim();
+        // 1. Resolve user profile: first by name, else any hawker/staff role, else fallback
+        let hawker = await tx.user.findFirst({
+            where: { name: { equals: cleanDriver, mode: 'insensitive' } }
+        });
+        if (!hawker) {
+            hawker = await tx.user.findFirst({
+                where: { role: { in: ['HAWKER', 'STAFF', 'OFFICE_STAFF', 'MANAGER', 'MASTER'] } }
+            });
         }
-    });
+        if (!hawker) {
+            hawker = await tx.user.findFirst();
+        }
+        if (!hawker) return null;
 
-    // 3. Create if not found
-    if (!customer) {
-        customer = await tx.customer.create({
-            data: {
-                name,
-                mobile: mobile || null,
+        const cleanCustName = name?.trim();
+        if (!cleanCustName) return null;
+
+        // 2. Look for existing customer
+        let customer = await tx.customer.findFirst({
+            where: {
                 hawkerId: hawker.id,
-                emptyBal: 0,
-                cashBal: 0
+                name: { equals: cleanCustName, mode: 'insensitive' },
             }
         });
-    }
 
-    return customer;
+        // 3. Create if not found
+        if (!customer) {
+            customer = await tx.customer.create({
+                data: {
+                    name: cleanCustName,
+                    mobile: mobile?.trim() || null,
+                    hawkerId: hawker.id,
+                    emptyBal: 0,
+                    cashBal: 0
+                }
+            });
+        }
+
+        return customer;
+    } catch (e) {
+        console.warn("Non-fatal getOrCreateCustomer error:", e);
+        return null;
+    }
 }

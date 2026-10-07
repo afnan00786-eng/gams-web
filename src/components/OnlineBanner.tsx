@@ -10,11 +10,13 @@
 
 import { useEffect, useState } from 'react';
 import { getPendingCount } from '@/lib/offlineQueue';
+import { syncPendingQueue } from '@/lib/syncManager';
 
 export function OnlineBanner() {
     const [isOnline, setIsOnline] = useState(true);
     const [pendingCount, setPendingCount] = useState(0);
     const [showSyncDone, setShowSyncDone] = useState(false);
+    const [isManualSyncing, setIsManualSyncing] = useState(false);
 
     useEffect(() => {
         // Set initial state
@@ -57,6 +59,12 @@ export function OnlineBanner() {
         };
     }, []);
 
+    const handleManualSync = async () => {
+        setIsManualSyncing(true);
+        await syncPendingQueue();
+        setIsManualSyncing(false);
+    };
+
     if (isOnline && !showSyncDone && pendingCount === 0) return null;
 
     return (
@@ -93,7 +101,26 @@ export function OnlineBanner() {
                     {pendingCount > 0 && <span style={{ opacity: 0.8 }}> — {pendingCount} action{pendingCount > 1 ? 's' : ''} pending</span>}
                 </>
             ) : (
-                <>🔄 Syncing {pendingCount} pending action{pendingCount > 1 ? 's' : ''}...</>
+                <>
+                    🔄 Syncing {pendingCount} action{pendingCount > 1 ? 's' : ''}...
+                    <button
+                        onClick={handleManualSync}
+                        disabled={isManualSyncing}
+                        style={{
+                            marginLeft: '8px',
+                            background: '#fff',
+                            color: '#c2410c',
+                            border: 'none',
+                            padding: '3px 10px',
+                            borderRadius: '999px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                        }}
+                    >
+                        {isManualSyncing ? 'Syncing...' : 'Sync Now'}
+                    </button>
+                </>
             )}
         </div>
     );

@@ -8,12 +8,14 @@
  */
 
 import { getPendingActions, removeAction } from './offlineQueue';
+import { useTripStore } from '@/store/useTripStore';
+import { useStockStore } from '@/store/useStockStore';
 
 let isSyncing = false;
 
 /** Send all pending offline actions to the server */
 export async function syncPendingQueue(): Promise<number> {
-    if (isSyncing || !navigator.onLine) return 0;
+    if (isSyncing || (typeof navigator !== 'undefined' && !navigator.onLine)) return 0;
 
     const pending = await getPendingActions();
     if (pending.length === 0) return 0;
@@ -37,13 +39,20 @@ export async function syncPendingQueue(): Promise<number> {
                 }
                 syncedCount++;
                 console.log(`[SyncManager] Synced: ${action.method} ${action.url}`);
+            } else if (res.status >= 400 && res.status < 500) {
+                // Client error (e.g. 400 Bad Request, 404 Not Found) - discard to avoid permanent queue clog
+                console.warn(`[SyncManager] Discarding non-retryable action (${res.status}): ${action.method} ${action.url}`);
+                if (action.id !== undefined) {
+                    await removeAction(action.id);
+                }
             } else {
-                console.warn(`[SyncManager] Server rejected: ${action.method} ${action.url} (${res.status})`);
-                // Keep it in queue for next sync attempt
+                const errText = await res.text().catch(() => '');
+                console.warn(`[SyncManager] Server rejected: ${action.method} ${action.url} (${res.status}):`, errText);
+                // Keep 500s in queue for next retry
             }
         } catch (e) {
             console.error(`[SyncManager] Network error syncing action:`, e);
-            // Keep in queue - will retry next time
+            // Break loop if connection dropped during flush
             break;
         }
     }
@@ -51,8 +60,16 @@ export async function syncPendingQueue(): Promise<number> {
     isSyncing = false;
 
     if (syncedCount > 0) {
-        // Dispatch a custom event so UI can refresh data
-        window.dispatchEvent(new CustomEvent('gams-sync-complete', { detail: { syncedCount } }));
+        // 1. Immediately refresh stores directly
+        try {
+            useTripStore.getState().fetchTrips();
+            useStockStore.getState().fetchStock();
+        } catch (e) { }
+
+        // 2. Dispatch a custom event so UI components can update
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('gams-sync-complete', { detail: { syncedCount } }));
+        }
     }
 
     return syncedCount;
@@ -60,23 +77,49 @@ export async function syncPendingQueue(): Promise<number> {
 
 /** Initialize sync listeners - call once on app start */
 export function initSyncManager(): () => void {
-    const handleOnline = async () => {
-        console.log('[SyncManager] Back online! Attempting sync...');
-        const count = await syncPendingQueue();
-        if (count > 0) {
-            console.log(`[SyncManager] Successfully synced ${count} pending action(s).`);
+    const triggerSync = async () => {
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+            await syncPendingQueue();
         }
     };
 
-    window.addEventListener('online', handleOnline);
+    const handleOnline = () => {
+        console.log('[SyncManager] Online event detected! Syncing queue...');
+        triggerSync();
+    };
 
-    // Also attempt sync immediately in case we just loaded while online
-    if (navigator.onLine) {
-        syncPendingQueue();
+    const handleVisibility = () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+            console.log('[SyncManager] Page visible, checking pending sync...');
+            triggerSync();
+        }
+    };
+
+    const handleFocus = () => {
+        triggerSync();
+    };
+
+    if (typeof window !== 'undefined') {
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('focus', handleFocus);
+        document.addEventListener('visibilitychange', handleVisibility);
     }
+
+    // Periodic check every 15s in case online event didn't fire (common on mobile PWAs)
+    const intervalId = setInterval(() => {
+        triggerSync();
+    }, 15000);
+
+    // Initial sync check
+    triggerSync();
 
     // Cleanup
     return () => {
-        window.removeEventListener('online', handleOnline);
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('focus', handleFocus);
+            document.removeEventListener('visibilitychange', handleVisibility);
+        }
+        clearInterval(intervalId);
     };
 }
