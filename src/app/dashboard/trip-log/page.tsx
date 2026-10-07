@@ -16,6 +16,7 @@ import { cn, generateTripReport, generateWhatsAppLink } from "@/lib/utils";
 import { format } from "date-fns";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { CapacitorBackButton } from "@/components/CapacitorBackButton";
+import { SectionGuard } from "@/components/auth/SectionGuard";
 import { useAuthStore } from "@/store/useAuthStore";
 import { useStockStore } from "@/store/useStockStore";
 import { useVehicleStore } from "@/store/useVehicleStore";
@@ -2340,7 +2341,8 @@ Kya wahan se resume karna chahte hain?
     );
 
     return (
-        <div className="w-full pb-12 overflow-x-hidden" id="main-container">
+        <SectionGuard section="TRIPS">
+            <div className="w-full pb-12 overflow-x-hidden" id="main-container">
 
             <CapacitorBackButton />
 
@@ -2629,5 +2631,6 @@ Kya wahan se resume karna chahte hain?
             </AlertDialog>
 
         </div>
+        </SectionGuard>
     );
 }

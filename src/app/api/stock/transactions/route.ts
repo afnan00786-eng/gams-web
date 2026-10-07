@@ -44,6 +44,7 @@ export async function GET(request: Request) {
                     fullChange: 0,
                     emptyChange: 0,
                     defectiveChange: 0,
+                    isTrip: false,
                 });
             } else {
                 for (const item of items) {
@@ -53,13 +54,80 @@ export async function GET(request: Request) {
                         type: tx.type,
                         stockType: item.type,
                         weight: stockWeightMap[item.type] || null,
+                        driverName: item.driverName || null,
+                        vehicleNo: item.vehicleNo || null,
                         fullChange: item.fullChange || 0,
                         emptyChange: item.emptyChange || 0,
                         defectiveChange: item.defectiveChange || 0,
+                        isTrip: false,
                     });
                 }
             }
         }
+
+        // Fetch Trips in the same date range and include them in Movement Audit
+        const trips = await prisma.trip.findMany({
+            where: {
+                timeOut: { gte: startDate, lt: endDate }
+            },
+            orderBy: { timeOut: 'desc' }
+        });
+
+        for (const trip of trips) {
+            let items: any[] = [];
+            try {
+                let parsed = JSON.parse(trip.stockItems || "[]");
+                if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+                if (Array.isArray(parsed)) items = parsed;
+            } catch { items = []; }
+
+            for (const item of items) {
+                const qty = item.quantity || item.out || 0;
+                if (qty > 0) {
+                    rows.push({
+                        id: `trip-out-${trip.id}-${item.type}`,
+                        date: trip.timeOut,
+                        type: 'TRIP OUT',
+                        driverName: trip.driverName,
+                        vehicleNo: trip.vehicleNo,
+                        destination: trip.destination,
+                        stockType: item.type,
+                        weight: stockWeightMap[item.type] || null,
+                        fullChange: -qty,
+                        emptyChange: 0,
+                        defectiveChange: 0,
+                        isTrip: true,
+                    });
+                }
+
+                // If trip is COMPLETED, also show what returned to godown
+                if (trip.status === 'COMPLETED' && trip.timeIn) {
+                    const fullRet = item.inFull || 0;
+                    const emptyRet = (item.inEmpty || 0) + (item.inExtraEmpty || 0) - (item.inEmptyBal || 0);
+                    const defRet = item.inDefective || 0;
+
+                    if (fullRet !== 0 || emptyRet !== 0 || defRet !== 0) {
+                        rows.push({
+                            id: `trip-in-${trip.id}-${item.type}`,
+                            date: trip.timeIn,
+                            type: 'TRIP RETURN',
+                            driverName: trip.driverName,
+                            vehicleNo: trip.vehicleNo,
+                            destination: trip.destination,
+                            stockType: item.type,
+                            weight: stockWeightMap[item.type] || null,
+                            fullChange: fullRet,
+                            emptyChange: emptyRet,
+                            defectiveChange: defRet,
+                            isTrip: true,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort combined audit rows descending by date
+        rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
         return NextResponse.json(rows);
     } catch (error) {

@@ -13,13 +13,17 @@ datasource db {
 // Models
 
 model User {
-  id        String   @id @default(cuid())
-  name      String
-  role      String   // Was Enum Role
-  mobile    String?  @unique
-  email     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(cuid())
+  name       String
+  role       String   // MASTER, MANAGER, GODOWN, HAWKER, ACCOUNTANT, OFFICE_STAFF
+  mobile     String?  @unique
+  email      String?
+  pin        String?  // 4-digit PIN
+  password   String?  // Master recovery password
+  agencyName      String?  // Optional agency name for Master/Owner
+  allowedSections String?  @default("[]") // JSON array of allowed module keys
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
   
   // Relations
   // trips     Trip[]

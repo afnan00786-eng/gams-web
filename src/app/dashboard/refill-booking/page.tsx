@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { SectionGuard } from "@/components/auth/SectionGuard";
 
 // Types
 interface Area {
@@ -339,7 +340,8 @@ export default function OfflineBookingPage() {
         });
 
     return (
-        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-10">
+        <SectionGuard section="BOOKING">
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-10">
             {/* Header section matches the aesthetic of the app */}
             <div className="flex items-start gap-4">
                 <Button 
@@ -1092,6 +1094,7 @@ export default function OfflineBookingPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-        </div>
+            </div>
+        </SectionGuard>
     );
 }

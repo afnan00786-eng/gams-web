@@ -29,6 +29,7 @@ import {
 import { generateAccountReport, generateWhatsAppLink, cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { CapacitorBackButton } from "@/components/CapacitorBackButton";
+import { SectionGuard } from "@/components/auth/SectionGuard";
 
 export default function HawkerAccountsPage() {
     const { employees, user, fetchEmployees } = useAuthStore();
@@ -119,7 +120,8 @@ export default function HawkerAccountsPage() {
     const totalEmpty = dbSummary?.reduce((acc: number, s: any) => acc + (s.totalEmptyBal || 0), 0) ?? 0;
 
     return (
-        <div className="w-full pb-12 space-y-8 animate-in fade-in duration-500">
+        <SectionGuard section="HAWKER_LEDGER">
+            <div className="w-full pb-12 space-y-8 animate-in fade-in duration-500">
             <CapacitorBackButton />
 
             {/* Header Module */}
@@ -543,5 +545,6 @@ export default function HawkerAccountsPage() {
                 </div>
             </div >
         </div >
+        </SectionGuard>
     );
 }

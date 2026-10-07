@@ -4,44 +4,70 @@ import prisma from "@/lib/prisma";
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { role, name, mobile } = body;
+        const { mobile, pin, role } = body;
 
-        // For MASTER, we might check a hardcoded value or special record
-        if (role === "MASTER") {
-            // In a real app, you'd check password hash. 
-            // For this demo, we just return success like the mock did.
+        // Legacy / dev fallback
+        if (!mobile && role && !pin) {
             return NextResponse.json({
-                id: "master-id",
-                name: name || "Master",
-                role: "MASTER"
+                id: "mock-" + role.toLowerCase(),
+                name: role,
+                role: role
             });
         }
 
-        // For Staff, find by mobile (since names might not be unique, but mobile should be)
-        // Or if login is by name selection (as per current UI design), we need to find by name & role.
-        // The current UI sends: { id, name, role } but backend needs to valid it.
-        // Actually the current UI just mocks it. The new UI should probably ask for mobile for staff login
-        // OR just select the user from a list if we want to keep it simple.
+        if (!mobile || !pin) {
+            return NextResponse.json({ error: "Mobile number and 4-digit PIN required" }, { status: 400 });
+        }
 
-        // Let's support login by ID or just Return success for now to match current behavior, 
-        // but eventually we should validate against DB.
+        const cleanMobile = String(mobile).replace(/\D/g, '').slice(-10);
+        const cleanPin = String(pin).trim();
 
-        // For now, let's just create/upsert the user if it's a "selection" based login 
-        // to ensure they exist in DB for foreign keys.
+        const users = await prisma.$queryRaw<any[]>`
+            SELECT id, name, role, mobile, email, pin, "agencyName", "allowedSections"
+            FROM "User"
+            WHERE mobile LIKE ${'%' + cleanMobile}
+            LIMIT 1
+        `;
 
-        // However, the proper way is: UI lists users -> User selects self -> Enters password/pin.
-        // Current app: Select Role -> Enter Name -> Login.
+        if (!users || users.length === 0) {
+            return NextResponse.json(
+                { error: "No account found with this mobile number. Contact Owner/Master." },
+                { status: 404 }
+            );
+        }
 
-        // Let's try to find an existing user with that Role and Name (partial match?)
-        // Or just create a session.
+        const user = users[0];
+
+        if (!user.pin) {
+            return NextResponse.json(
+                { error: "PIN is not set yet. Please set your 4-digit PIN first.", needsPinSetup: true },
+                { status: 403 }
+            );
+        }
+
+        if (String(user.pin).trim() !== cleanPin) {
+            return NextResponse.json(
+                { error: "Incorrect 4-digit PIN. Please try again." },
+                { status: 401 }
+            );
+        }
+
+        const masters = await prisma.$queryRaw<any[]>`
+            SELECT "agencyName" FROM "User" WHERE role = 'MASTER' LIMIT 1
+        `;
 
         return NextResponse.json({
-            id: "mock-session-id",
-            name: name,
-            role: role
+            id: user.id,
+            name: user.name,
+            role: user.role,
+            mobile: user.mobile,
+            email: user.email,
+            allowedSections: user.allowedSections || "[]",
+            agencyName: user.agencyName || masters?.[0]?.agencyName || "My Gas Agency"
         });
 
-    } catch (error) {
-        return NextResponse.json({ error: "Login failed" }, { status: 500 });
+    } catch (error: any) {
+        console.error("Login API Error:", error);
+        return NextResponse.json({ error: "Login failed due to server error" }, { status: 500 });
     }
 }

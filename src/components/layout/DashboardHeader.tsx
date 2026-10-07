@@ -12,7 +12,7 @@ export function DashboardHeader() {
     const { user, logout } = useAuthStore();
     const { language, setLanguage } = useLanguageStore();
     const router = useRouter();
-    const [agencyName, setAgencyName] = useState("My Gas Agency");
+    const [agencyName, setAgencyName] = useState(user?.agencyName || "My Gas Agency");
     const [isEditing, setIsEditing] = useState(false);
 
     const handleLogout = () => {

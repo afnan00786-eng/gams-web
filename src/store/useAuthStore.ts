@@ -10,13 +10,17 @@ export interface User {
     role: UserRole;
     email?: string;
     mobile?: string;
+    agencyName?: string;
+    pin?: string;
+    allowedSections?: string | string[];
 }
 
 interface AuthState {
     user: User | null;
     isAuthenticated: boolean;
     employees: User[];
-    login: (user: User) => Promise<boolean>; // Changed to Async
+    login: (credentials: any) => Promise<boolean>;
+    setUser: (user: User) => void;
     logout: () => void;
     fetchEmployees: () => Promise<void>;
     addEmployee: (employee: Omit<User, 'id'>) => Promise<void>;
@@ -31,7 +35,15 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: false,
             employees: [], // Initial state is empty, fetched from API
 
-            login: async (credentials) => {
+            setUser: (user: User) => set({ user, isAuthenticated: true }),
+
+            login: async (credentials: any) => {
+                // If direct user passed
+                if (credentials && credentials.id && credentials.role && !credentials.pin) {
+                    set({ user: credentials, isAuthenticated: true });
+                    return true;
+                }
+
                 try {
                     const res = await fetch('/api/auth/login', {
                         method: 'POST',
@@ -90,11 +102,21 @@ export const useAuthStore = create<AuthState>()(
             },
 
             updateEmployee: async (id, updates) => {
-                // For now relying on local update or strictly speaking should have PUT API
-                // Let's implement Optimistic update or just ignore for this step if API not ready
                 set((state) => ({
                     employees: state.employees.map((e) => e.id === id ? { ...e, ...updates } : e)
                 }));
+                try {
+                    const res = await offlineFetch('/api/employees', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id, ...updates }),
+                    });
+                    if (res.ok) {
+                        get().fetchEmployees();
+                    }
+                } catch (e) {
+                    console.error("Update Employee Error:", e);
+                }
             },
         }),
         {

@@ -14,10 +14,12 @@ import {
     UserPlus,
     LayoutDashboard,
     ArrowRight,
-    ClipboardList
+    ClipboardList,
+    Lock
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { hasPermission, ModuleKey } from "@/lib/permissions";
 
 interface ModuleCardProps {
     title: string;
@@ -26,7 +28,9 @@ interface ModuleCardProps {
     color: string;
     lightColor: string;
     description: string;
-    allowedRoles: UserRole[];
+    allowedRoles?: UserRole[];
+    sectionKey?: ModuleKey;
+    masterOnly?: boolean;
 }
 
 const modules: ModuleCardProps[] = [
@@ -37,7 +41,7 @@ const modules: ModuleCardProps[] = [
         color: "bg-orange-500",
         lightColor: "bg-orange-500/10",
         description: "Inventory & Snapshots",
-        allowedRoles: ["MASTER", "MANAGER", "GODOWN", "ACCOUNTANT", "OFFICE_STAFF"]
+        sectionKey: "STOCK"
     },
     {
         title: "Refill & Booking",
@@ -46,7 +50,7 @@ const modules: ModuleCardProps[] = [
         color: "bg-rose-500",
         lightColor: "bg-rose-500/10",
         description: "Orders & Refills",
-        allowedRoles: ["MASTER", "MANAGER", "ACCOUNTANT", "OFFICE_STAFF"]
+        sectionKey: "BOOKING"
     },
     {
         title: "Staff's A/c",
@@ -55,7 +59,7 @@ const modules: ModuleCardProps[] = [
         color: "bg-blue-500",
         lightColor: "bg-blue-500/10",
         description: "Commissions & Payroll",
-        allowedRoles: ["MASTER", "MANAGER", "ACCOUNTANT", "OFFICE_STAFF"]
+        sectionKey: "STAFF_ACCOUNTS"
     },
     {
         title: "Trip Log",
@@ -64,7 +68,7 @@ const modules: ModuleCardProps[] = [
         color: "bg-emerald-500",
         lightColor: "bg-emerald-500/10",
         description: "Active Trips & History",
-        allowedRoles: ["MASTER", "MANAGER", "GODOWN", "HAWKER", "ACCOUNTANT", "OFFICE_STAFF"]
+        sectionKey: "TRIPS"
     },
     {
         title: "Hawker's A/c",
@@ -73,7 +77,7 @@ const modules: ModuleCardProps[] = [
         color: "bg-purple-500",
         lightColor: "bg-purple-500/10",
         description: "Deliveries & Dues",
-        allowedRoles: ["MASTER", "MANAGER", "HAWKER", "ACCOUNTANT", "OFFICE_STAFF"]
+        sectionKey: "HAWKER_LEDGER"
     },
     {
         title: "Cash/Balance A/c",
@@ -82,7 +86,8 @@ const modules: ModuleCardProps[] = [
         color: "bg-teal-500",
         lightColor: "bg-teal-500/10",
         description: "Drawer & Bank Ledger",
-        allowedRoles: ["MASTER", "MANAGER", "ACCOUNTANT", "OFFICE_STAFF"]
+        sectionKey: "HAWKER_LEDGER",
+        allowedRoles: ["MASTER", "MANAGER", "ACCOUNTANT"]
     },
     {
         title: "Empty/Money Bal.",
@@ -91,7 +96,8 @@ const modules: ModuleCardProps[] = [
         color: "bg-indigo-500",
         lightColor: "bg-indigo-500/10",
         description: "Returnables & Pending",
-        allowedRoles: ["MASTER", "MANAGER", "GODOWN", "ACCOUNTANT", "OFFICE_STAFF"]
+        sectionKey: "STOCK",
+        allowedRoles: ["MASTER", "MANAGER", "GODOWN", "ACCOUNTANT"]
     },
     {
         title: "Summary",
@@ -100,7 +106,7 @@ const modules: ModuleCardProps[] = [
         color: "bg-slate-500",
         lightColor: "bg-slate-500/10",
         description: "Insights & Analytics",
-        allowedRoles: ["MASTER", "MANAGER", "ACCOUNTANT", "OFFICE_STAFF"]
+        allowedRoles: ["MASTER", "MANAGER", "ACCOUNTANT"]
     },
     {
         title: "Staff & Vehicles",
@@ -109,7 +115,7 @@ const modules: ModuleCardProps[] = [
         color: "bg-cyan-500",
         lightColor: "bg-cyan-500/10",
         description: "Assets & Access",
-        allowedRoles: ["MASTER", "MANAGER"]
+        masterOnly: true
     },
 ];
 
@@ -134,20 +140,27 @@ export default function DashboardPage() {
                 </div>
                 <p className="text-muted-foreground font-bold uppercase text-[10px] tracking-[0.2em] text-indigo-500 mt-2 ml-1">
                     Welcome back, {user.name} • {user.role}
+                    {user.agencyName && ` • ${user.agencyName}`}
                 </p>
             </div>
 
             {/* Redesigned Grid */}
             <div className="grid gap-4 md:gap-6 grid-cols-2 lg:grid-cols-4 pb-10">
                 {modules.map((module) => {
-                    const isAllowed = module.allowedRoles.includes(user.role);
+                    const isAllowed = user.role === 'MASTER' || (
+                        module.masterOnly
+                            ? false
+                            : module.sectionKey
+                                ? hasPermission(user, module.sectionKey)
+                                : (module.allowedRoles?.includes(user.role) ?? false)
+                    );
 
                     return (
                         <Card
                             key={module.title}
                             className={cn(
                                 "group relative flex flex-col justify-between overflow-hidden rounded-[2.5rem] border-none shadow-xl transition-all duration-300 hover:-translate-y-1 active-scale glass-card",
-                                !isAllowed ? "opacity-40 grayscale pointer-events-none" : "cursor-pointer"
+                                !isAllowed ? "opacity-45 grayscale pointer-events-none select-none" : "cursor-pointer"
                             )}
                             onClick={() => isAllowed && router.push(module.href)}
                         >
@@ -176,9 +189,10 @@ export default function DashboardPage() {
 
                                 <div className="mt-8 flex items-center justify-between">
                                     <div className={cn(
-                                        "rounded-full px-3 py-1 text-[8px] font-black uppercase tracking-widest",
+                                        "rounded-full px-3 py-1 text-[8px] font-black uppercase tracking-widest flex items-center gap-1",
                                         isAllowed ? "bg-indigo-50 text-indigo-600" : "bg-slate-100 text-slate-400"
                                     )}>
+                                        {!isAllowed && <Lock className="w-2.5 h-2.5" />}
                                         {isAllowed ? t("Access Granted") : t("Restricted")}
                                     </div>
                                     <ArrowRight className="h-4 w-4 text-slate-300 transition-transform duration-300 group-hover:translate-x-1 group-hover:text-indigo-500" />

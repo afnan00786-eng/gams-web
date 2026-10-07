@@ -26,6 +26,7 @@ import {
 import { generateAccountReport, generateWhatsAppLink, cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { CapacitorBackButton } from "@/components/CapacitorBackButton";
+import { SectionGuard } from "@/components/auth/SectionGuard";
 
 export default function StaffAccountsPage() {
     const { employees, user } = useAuthStore();
@@ -70,7 +71,8 @@ export default function StaffAccountsPage() {
     };
 
     return (
-        <div className="w-full pb-12 space-y-8 animate-in fade-in duration-500">
+        <SectionGuard section="STAFF_ACCOUNTS">
+            <div className="w-full pb-12 space-y-8 animate-in fade-in duration-500">
             <CapacitorBackButton />
 
             {/* Header Module */}
@@ -345,6 +347,7 @@ export default function StaffAccountsPage() {
                     )}
                 </div>
             </div>
-        </div>
+            </div>
+        </SectionGuard>
     );
 }

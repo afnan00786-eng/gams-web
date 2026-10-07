@@ -24,11 +24,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 
-import { Home, CalendarIcon, RotateCcw, Plus, Package, ArrowUpRight, ArrowDownRight, History, ShieldAlert, Pencil, Check, X, Trash2, RefreshCw } from "lucide-react";
+import { Home, CalendarIcon, RotateCcw, Plus, Package, ArrowUpRight, ArrowDownRight, History, ShieldAlert, Pencil, Check, X, Trash2, RefreshCw, Truck } from "lucide-react";
 import { format, isToday as isDateToday } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { CapacitorBackButton } from "@/components/CapacitorBackButton";
+import { SectionGuard } from "@/components/auth/SectionGuard";
 
 export default function StockPage() {
     const { stock, updateStock, fetchStock, addStockItem, bulkUpdateStock, lastBatchUpdate, undoLastBatch, deleteStockItem, editStockItem } = useStockStore();
@@ -261,7 +262,8 @@ export default function StockPage() {
     const totalEmptySum = getCategoryStock('14.2', 'empty') + getCategoryStock('19', 'empty') + getCategoryStock('5', 'empty');
 
     return (
-        <div className="space-y-8 pb-12">
+        <SectionGuard section="STOCK">
+            <div className="space-y-8 pb-12">
             <CapacitorBackButton />
 
             {/* Header Module */}
@@ -769,17 +771,27 @@ export default function StockPage() {
                                                                 "h-10 w-10 rounded-full flex items-center justify-center transition-all shrink-0",
                                                                 tx.type === 'RECEIVE' ? 'bg-emerald-50 text-emerald-600' :
                                                                 tx.type === 'CREATE' ? 'bg-indigo-50 text-indigo-600' :
+                                                                tx.type === 'TRIP RETURN' ? 'bg-teal-50 text-teal-600' :
+                                                                tx.type === 'TRIP OUT' ? 'bg-amber-50 text-amber-600' :
                                                                 'bg-rose-50 text-rose-600 group-hover:bg-rose-100'
                                                             )}>
                                                                 {tx.type === 'RECEIVE' ? <ArrowDownRight className="h-5 w-5" /> :
                                                                  tx.type === 'CREATE' ? <Plus className="h-5 w-5" /> :
+                                                                 (tx.type === 'TRIP OUT' || tx.type === 'TRIP RETURN') ? <Truck className="h-5 w-5" /> :
                                                                  <ArrowUpRight className="h-5 w-5" />}
                                                             </div>
                                                             <div>
                                                                 <span className="font-black text-[11px] uppercase tracking-tight text-slate-800 flex items-center gap-1.5">
                                                                     {tx.type} <span className="text-slate-300 font-medium">/</span> {tx.weight || "—"}
                                                                 </span>
-                                                                <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">{tx.stockType || "Unknown"}</div>
+                                                                <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">
+                                                                    {tx.stockType || "Unknown"}
+                                                                    {tx.driverName && (
+                                                                        <span className="text-indigo-600 font-black ml-1.5">
+                                                                            • {tx.driverName} {tx.vehicleNo ? `(${tx.vehicleNo})` : ''}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </td>
@@ -831,7 +843,7 @@ export default function StockPage() {
                                                                         <span className="text-[10px] text-slate-300 font-bold">—</span>
                                                                     )}
                                                                 </div>
-                                                                {canEdit && (
+                                                                {canEdit && !tx.isTrip && (
                                                                     <button
                                                                         className="opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 rounded-lg bg-slate-100 hover:bg-indigo-100 flex items-center justify-center shrink-0"
                                                                         onClick={() => {
@@ -950,6 +962,7 @@ export default function StockPage() {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
-        </div>
+            </div>
+        </SectionGuard>
     );
 }
