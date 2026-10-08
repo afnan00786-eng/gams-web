@@ -5,8 +5,9 @@ import { useAuthStore } from "@/store/useAuthStore";
 import { useLanguageStore } from "@/store/useLanguageStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { LogOut, Globe, Edit2, Check } from "lucide-react";
+import { LogOut, Globe, Edit2, Check, Info } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { AboutModal } from "@/components/AboutModal";
 
 export function DashboardHeader() {
     const { user, logout } = useAuthStore();
@@ -14,6 +15,7 @@ export function DashboardHeader() {
     const router = useRouter();
     const [agencyName, setAgencyName] = useState(user?.agencyName || "My Gas Agency");
     const [isEditing, setIsEditing] = useState(false);
+    const [aboutOpen, setAboutOpen] = useState(false);
 
     const handleLogout = () => {
         logout();
@@ -59,7 +61,19 @@ export function DashboardHeader() {
                         )}
                     </div>
 
-                    <div className="flex items-center space-x-3">
+                    <div className="flex items-center space-x-2 sm:space-x-3">
+                        {/* About & Share Info Button */}
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-10 px-3 rounded-full hover:bg-white/10 text-white font-bold transition-all active-scale border border-white/10 flex items-center gap-1.5"
+                            onClick={() => setAboutOpen(true)}
+                            title="About GAMS & Share"
+                        >
+                            <Info className="h-4 w-4 text-indigo-400" />
+                            <span className="hidden md:inline text-xs">About</span>
+                        </Button>
+
                         {/* Language Toggle - Premium */}
                         <Button
                             variant="ghost"
@@ -89,6 +103,8 @@ export function DashboardHeader() {
                     </div>
                 </div>
             </div>
+
+            <AboutModal open={aboutOpen} onOpenChange={setAboutOpen} />
         </header>
     );
 }
